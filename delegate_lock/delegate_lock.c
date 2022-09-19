@@ -23,6 +23,11 @@
 #include <linux/mutex.h>
 #include <linux/prefetch.h>
 #include <asm/byteorder.h>
+#include <linux/module.h>
+
+MODULE_DESCRIPTION("Simple Lock benchmark module");
+MODULE_AUTHOR("Wonhyuk Yang");
+MODULE_LICENSE("GPL");
 
 #include "delegate_lock.h"
 #include "delegate_mcs_spinlock.h"
@@ -36,7 +41,7 @@
  * Exactly fits one 64-byte cacheline on a 64-bit architecture.
  *
  */
-static DEFINE_PER_CPU_ALIGNED(struct delegate_mcs_spinlock, delgate_mcs_nodes[MAX_NODES]);
+static DEFINE_PER_CPU_ALIGNED(struct delegate_mcs_spinlock, delegate_mcs_nodes[MAX_NODES]);
 
 static inline __pure u32 encode_tail(int cpu, int idx)
 {
@@ -54,8 +59,9 @@ static inline __pure struct delegate_mcs_spinlock *decode_tail(u32 tail)
 	int idx = (tail &  _D_WAITER_IDX_MASK) >> _D_WAITER_IDX_OFFSET;
 
 	return per_cpu_ptr(&delegate_mcs_nodes[idx], cpu);
+}
 
-static __always_inline u32 xchg_tail(struct qspinlock *lock, u32 tail)
+u32 xchg_tail(struct delegate_spinlock *lock, u32 tail)
 {
 	u32 old;
 	u32 new = _D_LOCKED_VAL | tail;
@@ -72,12 +78,12 @@ static __always_inline u32 xchg_tail(struct qspinlock *lock, u32 tail)
 	return old;
 }
 
-static __always_inline void clear_waiter(struct delegate_spinlock *lock)
+void clear_waiter(struct delegate_spinlock *lock)
 {
 	WRITE_ONCE(lock->locked, _D_LOCKED_VAL);
 }
 
-static __always_inline void* delegate_put_node()
+void *delegate_put_node(void)
 {
 	struct delegate_mcs_spinlock *node;
 	int idx;
@@ -93,21 +99,7 @@ static __always_inline void* delegate_put_node()
 	return ret;
 }
 
-void __delegate_spin_lock(struct delegate_spinlock *lock, u32 val)
-{
-	delegate_busy_waiting(lock, NULL, NULL);
-}
-EXPORT_SYMBOL(__delegate_spin_lock);
-
-void __delegate_spin_unlock(struct delegate_spinlock *lock)
-{
-	/* Run as delegate thread*/
-	delegate_execution(lock);
-	return delegate_put_node();
-}
-EXPORT_SYMBOL(__delegate_spin_unlock);
-
-int delegate_busy_waiting(struct delegate_spinlock *lock, critical_section sc, void *params)
+int delegate_busy_waiting(struct delegate_spinlock *lock, critical_section cs, void *params)
 {
 	/*
 	 * Busy waiting phase
@@ -115,7 +107,7 @@ int delegate_busy_waiting(struct delegate_spinlock *lock, critical_section sc, v
 	 * Return 0: Delicated job done
 	 * Return 1: Selected as a delegate thread
 	 */
-	struct delegate_mcs_spinlock *next, *node;
+	struct delegate_mcs_spinlock *node;
 	u32 old, tail;
 	int idx;
 	
@@ -149,7 +141,7 @@ int delegate_busy_waiting(struct delegate_spinlock *lock, critical_section sc, v
 	if (!old)
 		return 1;	
 
-	if (!node->cs || old & _D_WAITER_MASK != tail) {
+	if (!node->cs || (old & _D_WAITER_MASK) != tail) {
 		arch_mcs_spin_lock_contended(&node->delegate);
 		return 1;
 	}
@@ -193,6 +185,18 @@ yield:
 	return;
 }
 
+void __delegate_spin_lock(struct delegate_spinlock *lock, u32 val)
+{
+	delegate_busy_waiting(lock, NULL, NULL);
+}
+
+void __delegate_spin_unlock(struct delegate_spinlock *lock)
+{
+	/* Run as delegate thread*/
+	delegate_execution(lock);
+	delegate_put_node();
+}
+
 void* __delegate_run(struct delegate_spinlock *lock, critical_section cs, void* params)
 {
 	int ret;	
@@ -205,4 +209,4 @@ void* __delegate_run(struct delegate_spinlock *lock, critical_section cs, void* 
 	delegate_execution(lock);
 	return delegate_put_node();
 }
-EXPORT_SYMBOL(__delegate_run);
+

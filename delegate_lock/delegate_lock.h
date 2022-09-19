@@ -19,23 +19,26 @@
 #include "delegate_lock_types.h"
 
 typedef void* (*critical_section)(void *);
+void __delegate_spin_lock(struct delegate_spinlock *lock, u32 val);
+void __delegate_spin_unlock(struct delegate_spinlock *lock);
+void* __delegate_run(struct delegate_spinlock *lock, critical_section cs, void* params);
 
-static __always_inline int delegate_spin_is_locked(struct qspinlock *lock)
+static __always_inline int delegate_spin_is_locked(struct delegate_spinlock *lock)
 {
 	return atomic_read(&lock->val);
 }
 
-static __always_inline int delegate_is_contended(struct qspinlock *lock)
+static __always_inline int delegate_is_contended(struct delegate_spinlock *lock)
 {
+	return 0;
 }
 
-static __always_inline int delegate_spin_value_unlocked(struct qspinlock lock)
+static __always_inline int delegate_spin_value_unlocked(struct delegate_spinlock *lock)
 {
-	return !delegate_spin_is_locked(&lock.val);
+	return !delegate_spin_is_locked(lock);
 }
 
-}
-static __always_inline int delegate_spin_trylock(struct qspinlock *lock)
+static __always_inline int delegate_spin_trylock(struct delegate_spinlock *lock)
 {
 	if (!atomic_read(&lock->val) &&
 	   (atomic_cmpxchg_acquire(&lock->val, 0, _D_LOCKED_VAL) == 0))
@@ -43,7 +46,7 @@ static __always_inline int delegate_spin_trylock(struct qspinlock *lock)
 	return 0;
 }
 
-static __always_inline void delegate_spin_lock(struct qspinlock *lock)
+static __always_inline void delegate_spin_lock(struct delegate_spinlock *lock)
 {
 	u32 val;
 
@@ -53,12 +56,12 @@ static __always_inline void delegate_spin_lock(struct qspinlock *lock)
 	__delegate_spin_lock(lock, val);
 }
 
-static __always_inline void delegate_spin_unlock(struct qspinlock *lock)
+static __always_inline void delegate_spin_unlock(struct delegate_spinlock *lock)
 {
 	__delegate_spin_unlock(lock);
 }
 
-static __always_inline void* delegate_run(struct qspinlock *lock, critical_section cs, void* params)
+static __always_inline void* delegate_run(struct delegate_spinlock *lock, critical_section cs, void* params)
 {
 	return __delegate_run(lock, cs, params);
 }
@@ -68,12 +71,12 @@ static __always_inline void* delegate_run(struct qspinlock *lock, critical_secti
  * Remapping spinlock architecture specific functions to the corresponding
  * delegate spinlock functions.
  */
-#define arch_spin_is_locked(l)		delegate_spin_is_locked(l)
-#define arch_spin_is_contended(l)	delegate_spin_is_contended(l)
-#define arch_spin_value_unlocked(l)	delegate_spin_value_unlocked(l)
-#define arch_spin_lock(l)		delegate_spin_lock(l)
-#define arch_spin_trylock(l)		delegate_spin_trylock(l)
-#define arch_spin_unlock(l)		delegate_spin_unlock(l)
-#define arch_delegate_run(l, cs, params)	delegate_run(l, cs, params)
+#define my_arch_spin_is_locked(l)		delegate_spin_is_locked(l)
+#define my_arch_spin_is_contended(l)	delegate_spin_is_contended(l)
+#define my_arch_spin_value_unlocked(l)	delegate_spin_value_unlocked(l)
+#define my_arch_spin_lock(l)		delegate_spin_lock(l)
+#define my_arch_spin_trylock(l)		delegate_spin_trylock(l)
+#define my_arch_spin_unlock(l)		delegate_spin_unlock(l)
+#define my_arch_delegate_run(l, cs, params)	delegate_run(l, cs, params)
 
 #endif /* __ASM_GENERIC_DELEGATE_SPINLOCK_H */

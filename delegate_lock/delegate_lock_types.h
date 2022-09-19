@@ -34,7 +34,7 @@ typedef struct delegate_spinlock {
 		};
 #endif
 	};
-} arch_spinlock_t;
+} my_arch_spinlock_t;
 
 /*
  * Initializier

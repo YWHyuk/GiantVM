@@ -14,8 +14,8 @@
 #define __LINUX_DELEGATE_MCS_SPINLOCK_H
 
 
-struct mcs_spinlock {
-	struct mcs_spinlock *next;
+struct delegate_mcs_spinlock {
+	void *lock;
 	int locked;	/* 1 if lock acquired */
 	int delegate;	/* 1 if selected as delegate thread */
 	int count; 	/* nesting count, see qspinlock.c */

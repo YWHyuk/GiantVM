@@ -29,10 +29,42 @@ MODULE_LICENSE("GPL");
 #define NR_BENCH	(5000000)
 #define NR_SAMPLE	1000
 
+#define MAX_CPU		32
+#define MAX_DELAY 	10000
+
+#define GVM_CACHE_BYTES		(1<<12)
+
+static int max_cpus = 31;
+static int delay_time = 100;
+static int nr_bench = 500000<<1;
+static int thread_switch = 0;
+
+typedef void* (*request_t)(void *);
+typedef int (*test_thread_t)(void *);
+
+int prepare_tests(test_thread_t, void *, const char *);
+int cclock_bench(void *data);
+int spinlock_bench(void *data);
+int cclist_bench(void *data);
+int spinlist_bench(void *data);
+
+struct lb_info {
+	request_t req;
+	void *params;
+	void *lock;
+	int counter;
+	bool monitor;
+	bool quit;
+};
+
+DEFINE_PER_CPU(struct lb_info, lb_info_array);
+DEFINE_PER_CPU(struct task_struct *, task_array);
+
 static unsigned long perf_result[NR_BENCH/NR_SAMPLE];
 
 /* Dummy workload */
 __attribute__((aligned(GVM_CACHE_BYTES))) DEFINE_SPINLOCK(dummy_spinlock);
+__attribute__((aligned(GVM_CACHE_BYTES))) struct delegate_spinlock dummy_dlock = __ARCH_SPIN_LOCK_UNLOCKED;
 atomic_t dummy_lock __attribute__((aligned(GVM_CACHE_BYTES))) = ATOMIC_INIT(0);
 int dummy_counter __attribute__((aligned(GVM_CACHE_BYTES))) = 0;
 int cache_table[1024*4+1];
@@ -83,12 +115,12 @@ static ssize_t lb_write(struct file *filp, const char __user *ubuf,
 			li = &per_cpu(lb_info_array, cpu);
 			li->req = dummy_increment;
 			li->params = &dummy_counter;
-			li->lock = (void *)&dummy_cclock;
+			li->lock = (void *)&dummy_dlock;
 			li->counter = nr_bench;
 			li->monitor = monitor_thread;
 			monitor_thread = false;
 		}
-		prepare_tests(cclock_bench, (void *)&lb_info_array, "cc-lockbench");
+		prepare_tests(cclock_bench, (void *)&lb_info_array, "d-lockbench");
 	} else if (val == 2) {
 		for_each_online_cpu(cpu) {
 			li = &per_cpu(lb_info_array, cpu);
@@ -104,12 +136,12 @@ static ssize_t lb_write(struct file *filp, const char __user *ubuf,
 	else if (val == 3) {
 		for_each_online_cpu(cpu) {
 			li = &per_cpu(lb_info_array, cpu);
-			li->lock = (void *)&dummy_cclock;
+			li->lock = (void *)&dummy_dlock;
 			li->counter = nr_bench;
 			li->monitor = monitor_thread;
 			monitor_thread = false;
 		}
-		prepare_tests(cclist_bench, (void *)&lb_info_array, "cc-list");
+		prepare_tests(cclist_bench, (void *)&lb_info_array, "d-list");
 	} else if (val == 4) {
 		for_each_online_cpu(cpu) {
 			li = &per_cpu(lb_info_array, cpu);
@@ -132,9 +164,7 @@ static ssize_t lb_quit(struct file *filp, const char __user *ubuf,
 {
 	unsigned long val;
 	int ret, cpu;
-	int j;
 	struct lb_info *ld;
-	struct cc_node *node;
 	ret = kstrtoul_from_user(ubuf, cnt, 10, &val);
 
 	if (ret)
@@ -146,13 +176,7 @@ static ssize_t lb_quit(struct file *filp, const char __user *ubuf,
 			ld = &per_cpu(lb_info_array, cpu);
 			ld->quit = true;
 
-			smp_mb();
-			node = per_cpu_ptr(node_array, cpu);
-			for (j=0; j<INDEX_SIZE; j++) {
-				node[j].status = CC_STAT_DONE;
-			}
 		}
-		per_cpu_ptr(node_array, 0)[0].status = 0;
 	}
 	(*ppos)++;
 	return cnt;
@@ -392,7 +416,7 @@ int cclock_bench(void *data)
 			prev = cur;
 		}
 		local_irq_save(flags);
-		delegate_run(lb_data->lock, lb_data->req, lb_data->params);
+		__delegate_run(lb_data->lock, lb_data->req, lb_data->params);
 		local_irq_restore(flags);
 	}
 
@@ -473,7 +497,7 @@ int cclist_bench(void *data)
 			param.arg[0] = list_node+j;
 
 			local_irq_save(flags);
-			delegate_run(lb_data->lock, cc_list_add, &param);
+			__delegate_run(lb_data->lock, cc_list_add, &param);
 			local_irq_restore(flags);
 			udelay(5);
 		}
@@ -482,7 +506,7 @@ int cclist_bench(void *data)
 			param.arg[0] = list_node+j;
 
 			local_irq_save(flags);
-			delegate_run(lb_data->lock, cc_list_del, &param);
+			__delegate_run(lb_data->lock, cc_list_del, &param);
 			local_irq_restore(flags);
 			udelay(5);
 		}
@@ -582,9 +606,6 @@ int prepare_tests(test_thread_t test, void *arg, const char *name)
 /* module init/exit */
 static int lock_benchmark_init(void)
 {
-	struct cc_node *tmp;
-	int cpu;
-
 	lb_debugfs_init();
 	return 0;
 }
