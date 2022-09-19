@@ -25,14 +25,12 @@
 #include <asm/byteorder.h>
 #include <linux/module.h>
 
-MODULE_DESCRIPTION("Simple Lock benchmark module");
-MODULE_AUTHOR("Wonhyuk Yang");
-MODULE_LICENSE("GPL");
-
 #include "delegate_lock.h"
 #include "delegate_mcs_spinlock.h"
 
 #define MAX_NODES	4
+
+MODULE_LICENSE("GPL");
 
 /*
  * Per-CPU queue node structures; we can never have more than 4 nested
@@ -66,21 +64,23 @@ u32 xchg_tail(struct delegate_spinlock *lock, u32 tail)
 	u32 old;
 	u32 new = _D_LOCKED_VAL | tail;
 	for (;;) {
-		old = atomic_cmpxchg_relaxed(&lock->val, _D_LOCKED_VAL, new);
+		/* FIXME: Need to be peek logic */
+		pr_debug("[REGIST 1] cpu: %x lock: %x, cond: %x, new: %x", smp_processor_id(), atomic_read(&lock->val), _D_LOCKED_VAL, new);
+		old = atomic_cmpxchg_acquire(&lock->val, _D_LOCKED_VAL, new);
+		pr_debug("[REGIST 2] cpu: %x lock: %x, cond: %x, new: %x", smp_processor_id(), atomic_read(&lock->val), old, new);
 		if (old == _D_LOCKED_VAL)
 			break;
 		else if (old & _D_WAITER_MASK)
 			break;
-		else if (old == 0 && delegate_spin_trylock(lock)) {
+		else if (old == 0 && delegate_spin_trylock(lock))
 			break;
-		}
 	}
 	return old;
 }
 
 void clear_waiter(struct delegate_spinlock *lock)
 {
-	WRITE_ONCE(lock->locked, _D_LOCKED_VAL);
+	atomic_set(&lock->val, _D_LOCKED_VAL);
 }
 
 void *delegate_put_node(void)
@@ -141,7 +141,7 @@ int delegate_busy_waiting(struct delegate_spinlock *lock, critical_section cs, v
 	if (!old)
 		return 1;	
 
-	if (!node->cs || (old & _D_WAITER_MASK) != tail) {
+	if (!node->cs || old == 1) {
 		arch_mcs_spin_lock_contended(&node->delegate);
 		return 1;
 	}
@@ -158,13 +158,10 @@ void delegate_execution(struct delegate_spinlock *lock)
 	u32 old, tail;
 	int idx, cpu;
 	
-	/* clear waiter */
-	clear_waiter(lock);
-	
 	for_each_cpu_wrap(cpu, cpu_online_mask, smp_processor_id()) {
 		next = per_cpu_ptr(delegate_mcs_nodes, cpu);
-		for (idx = next->count-1; idx >= 0;) {
-			if (next[idx].lock != lock || !next[idx].locked)
+		for (idx = next->count-1; idx >= 0;idx--) {
+			if (next[idx].lock != lock || next[idx].locked)
 				continue;
 			if (!next->cs)
 				goto yield;
@@ -173,7 +170,9 @@ void delegate_execution(struct delegate_spinlock *lock)
 		}
 	}
 
+	pr_debug("[UNLOCK 1] cpu: %x lock: %x, cond: %x, new: %x", smp_processor_id(), atomic_read(&lock->val), _D_LOCKED_VAL, 0);
 	old = atomic_cmpxchg_relaxed(&lock->val, _D_LOCKED_VAL, 0);
+	pr_debug("[UNLOCK 2] cpu: %x lock: %x, cond: %x, new: %x", smp_processor_id(), atomic_read(&lock->val), old, 0);
 	if (old != _D_LOCKED_VAL) {
 		tail = old & _D_WAITER_MASK;
 		next = decode_tail(tail);
@@ -181,7 +180,10 @@ void delegate_execution(struct delegate_spinlock *lock)
 	}
 	return;
 yield:
+	/* clear waiter */
+	clear_waiter(lock);
 	arch_mcs_spin_unlock_contended(&next->delegate);
+	
 	return;
 }
 
@@ -200,11 +202,12 @@ void __delegate_spin_unlock(struct delegate_spinlock *lock)
 void* __delegate_run(struct delegate_spinlock *lock, critical_section cs, void* params)
 {
 	int ret;	
-
+	//pr_debug("cpu %d: lock: %x busy-waiting-phase", lock->val, smp_processor_id());
 	ret = delegate_busy_waiting(lock, cs, params);
 	if (!ret)
 		return delegate_put_node();
 	
+	//pr_debug("cpu %d: lock: %x Delegate-phase", lock->val, smp_processor_id());
 	/* Run as delegate thread*/
 	delegate_execution(lock);
 	return delegate_put_node();

@@ -1,3 +1,5 @@
 EXTRA_CFLAGS = -Wall -g
 
-obj-m        = delegate_lock.o
+obj-m := lock.o
+lock-objs := modul.o delegate_lock.o
+

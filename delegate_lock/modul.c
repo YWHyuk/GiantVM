@@ -415,9 +415,9 @@ int cclock_bench(void *data)
 			perf_result[(i/NR_SAMPLE)-1] = cur-prev;
 			prev = cur;
 		}
-		local_irq_save(flags);
+		//local_irq_save(flags);
 		__delegate_run(lb_data->lock, lb_data->req, lb_data->params);
-		local_irq_restore(flags);
+		//local_irq_restore(flags);
 	}
 
 	if (unlikely(lb_data->monitor)) {

@@ -1,5 +1,5 @@
 KDIR = /lib/modules/`uname -r`/build
-MODULE_NAME=modul
+MODULE_NAME=lock
 kbuild:
 	make -C $(KDIR) M=`pwd`
 
