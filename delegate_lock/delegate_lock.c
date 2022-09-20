@@ -64,16 +64,21 @@ u32 xchg_tail(struct delegate_spinlock *lock, u32 tail)
 	u32 old;
 	u32 new = _D_LOCKED_VAL | tail;
 	for (;;) {
-		/* FIXME: Need to be peek logic */
-		pr_debug("[REGIST 1] cpu: %x lock: %x, cond: %x, new: %x", smp_processor_id(), atomic_read(&lock->val), _D_LOCKED_VAL, new);
+		/* Fast path */
+		old = atomic_read(&lock->val);
+		if (old == 0 && delegate_spin_trylock(lock))
+			break;
+		else if (old & _D_WAITER_MASK)
+			break;
+		/* Slow path */
 		old = atomic_cmpxchg_acquire(&lock->val, _D_LOCKED_VAL, new);
-		pr_debug("[REGIST 2] cpu: %x lock: %x, cond: %x, new: %x", smp_processor_id(), atomic_read(&lock->val), old, new);
 		if (old == _D_LOCKED_VAL)
 			break;
 		else if (old & _D_WAITER_MASK)
 			break;
 		else if (old == 0 && delegate_spin_trylock(lock))
 			break;
+
 	}
 	return old;
 }
